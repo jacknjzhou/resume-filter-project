@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+.env
+.venv/
+
+# 运行产物
+backend/uploads/
+
+# 前端
+node_modules/
+frontend/dist/
+frontend/build.log
+frontend/vite.config.js.timestamp-*
+
+# 临时调试文件
+_*.txt
+_*.json
+_*.md
+gs.txt
+log.txt
+show.txt
+status2.txt
+final.txt
+samples/_*.py
+samples/_out.txt
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

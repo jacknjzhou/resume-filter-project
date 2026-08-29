@@ -1,0 +1,46 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-resume}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resume}
+      POSTGRES_DB: ${POSTGRES_DB:-resume_review}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-resume}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://resume:resume@db:5432/resume_review}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  web:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+  ocr:
+    image: paddlepaddle/paddleocr:latest
+    profiles: ["ocr"]
+    # 部署 PaddleOCR HTTP 服务；具体启动命令按所选镜像文档调整，
+    # 必须暴露 POST 接口返回 {"lines": [{"text": "...", "confidence": 0.98}]}
+    expose:
+      - "8866"
+
+volumes:
+  pgdata:
+  uploads:
