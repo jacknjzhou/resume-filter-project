@@ -55,6 +55,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { gradeType } from '../utils/format'
 
 const props = defineProps({
   jdParsed: { type: Object, default: null },
@@ -68,9 +69,6 @@ const hasSummary = computed(() =>
 const sortedRankings = computed(() =>
   [...(props.summaryReport?.rankings || [])].sort((a, b) =>
     (a.rank || 99) - (b.rank || 99)))
-
-const gradeType = (g) =>
-  ({ A: 'success', B: 'warning', C: 'info', D: 'danger' }[g] || 'info')
 
 const resumeName = (resumeId) =>
   props.resumes.find(r => r.id === resumeId)?.filename || '未知简历'

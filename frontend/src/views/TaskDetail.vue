@@ -120,6 +120,7 @@ import { useRoute } from 'vue-router'
 import { getTask, getResumeReport } from '../api'
 import JDParsedCard from '../components/JDParsedCard.vue'
 import ResumeStepResults from '../components/ResumeStepResults.vue'
+import { gradeType } from '../utils/format'
 
 const route = useRoute()
 const task = ref(null)
@@ -165,7 +166,6 @@ const STATUS_LABELS = {
 const statusLabel = (s) => STATUS_LABELS[s] || s
 const tagType = (s) => ({
   done: 'success', failed: 'danger', needs_review: 'warning' }[s] || 'info')
-const gradeType = (g) => ({ A: 'success', B: 'warning', C: 'info', D: 'danger' }[g] || 'info')
 
 // 时间线查询：task 用字符串 'task' 作 key，简历用 resume id
 function timelineOf(key) {
