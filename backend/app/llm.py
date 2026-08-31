@@ -27,7 +27,7 @@ class LLMClient:
         )
 
     async def chat_json(self, role, system_prompt, user_prompt, schema: type[BaseModel],
-                        task_id=None, model=None):
+                        task_id=None, model=None, resume_id=None):
         last_err = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
             prompt = user_prompt
@@ -48,7 +48,7 @@ class LLMClient:
                 usage = resp.usage
             except Exception as e:  # 网络/服务错误也计一次尝试
                 last_err = str(e)
-                self._log(task_id, role, 0, 0, start)
+                self._log(task_id, role, 0, 0, start, resume_id)
                 if attempt < MAX_ATTEMPTS:
                     await asyncio.sleep(RETRY_BACKOFF_SECONDS)
                 continue
@@ -56,15 +56,17 @@ class LLMClient:
                 result = schema.model_validate_json(content)
             except ValidationError as e:
                 last_err = str(e)
-                self._log(task_id, role, usage.prompt_tokens, usage.completion_tokens, start)
+                self._log(task_id, role, usage.prompt_tokens, usage.completion_tokens,
+                          start, resume_id)
                 continue
-            self._log(task_id, role, usage.prompt_tokens, usage.completion_tokens, start)
+            self._log(task_id, role, usage.prompt_tokens, usage.completion_tokens,
+                      start, resume_id)
             return result
         raise LLMError(f"角色 {role} 在 {MAX_ATTEMPTS} 次尝试后仍未产出合法 JSON：{last_err}",
                        attempts=MAX_ATTEMPTS)
 
-    def _log(self, task_id, role, ptok, ctok, start):
-        self.db.add(LLMLog(task_id=task_id, role=role,
+    def _log(self, task_id, role, ptok, ctok, start, resume_id=None):
+        self.db.add(LLMLog(task_id=task_id, role=role, resume_id=resume_id,
                            prompt_tokens=ptok or 0, completion_tokens=ctok or 0,
                            duration_ms=int((time.monotonic() - start) * 1000)))
         self.db.commit()

@@ -33,3 +33,31 @@ export function subscribeEvents(taskId, onEvent) {
   es.onmessage = (e) => onEvent(JSON.parse(e.data))
   return es
 }
+
+export async function listTasks(params = {}) {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
+  ).toString()
+  const resp = await fetch(`/api/tasks${qs ? `?${qs}` : ''}`)
+  if (!resp.ok) throw new Error('获取任务列表失败')
+  return resp.json()
+}
+
+export async function getSettings() {
+  const resp = await fetch('/api/settings')
+  if (!resp.ok) throw new Error('获取配置失败')
+  return resp.json()
+}
+
+export async function updateSettings(values) {
+  const resp = await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values),
+  })
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}))
+    throw new Error(err.detail || `保存失败 (${resp.status})`)
+  }
+  return resp.json()
+}

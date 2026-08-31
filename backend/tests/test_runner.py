@@ -72,7 +72,40 @@ async def test_pipeline_full_flow(db_session, seed, session_factory):
         assert r.status == "done"
         assert r.final_grade == "A"
     assert len(task.summary_report["rankings"]) == 2
+    # 任务级时间线：jd_parse 与 summarize 两阶段均已闭合
+    stages = {t["stage"]: t for t in task.stage_timeline}
+    assert set(stages) == {"jd_parse", "summarize"}
+    for t in task.stage_timeline:
+        assert t["started_at"] and t["ended_at"] and t["status"] == "ok"
+    # 简历级时间线：四个阶段全部闭合
+    for r in task.resumes:
+        r_stages = {t["stage"] for t in r.stage_timeline}
+        assert r_stages == {"parsing", "extracting", "screening", "evaluating"}
     bus.unsubscribe(task.id, q)
+
+
+async def test_stage_timeline_closes_open_stages_on_failure(db_session, seed, session_factory):
+    task, r1, r2 = seed
+    llm = _mk_profile_llm()
+
+    async def fake_extract(llm_, text, rid, task_id=None):
+        raise RuntimeError("extract exploded")
+
+    runner_mod._set_session_factory(session_factory)
+    with patch.object(runner_mod, "LLMClient", return_value=llm), \
+         patch.object(runner_mod, "_load_file", return_value=b"text"), \
+         patch.object(runner_mod.roles, "extract_profile", fake_extract):
+        await runner_mod.run_task(task.id)
+
+    db_session.expire_all()
+    task = db_session.get(Task, task.id)
+    assert task.status == "failed"
+    jd_stage = next(t for t in task.stage_timeline if t["stage"] == "jd_parse")
+    assert jd_stage["status"] == "ok"  # JD 阶段成功，之后才失败
+    r = db_session.get(type(r1), r1.id)
+    ext = next(t for t in r.stage_timeline if t["stage"] == "extracting")
+    assert ext["status"] == "failed" and ext["detail"]
+    assert ext.get("ended_at") is not None
 
 
 async def test_screen_reject_short_circuit(db_session, seed, session_factory):
@@ -83,7 +116,11 @@ async def test_screen_reject_short_circuit(db_session, seed, session_factory):
 
     async def chat_json(role, *a, **kw):
         if role == "screener" and f"resume_id={r1.id}" in a[1]:
-            return ScreeningResult(passed=False, checks=[], reject_reason="学历不符")
+            # 0/1 = 0% < 40% 阈值，重算后仍被拒（checks 为空会被重算为通过）
+            return ScreeningResult(
+                passed=False,
+                checks=[{"requirement": "本科及以上", "met": False, "evidence": "大专学历"}],
+                reject_reason="学历不符")
         return await original_chat(role, *a, **kw)
     llm.chat_json = chat_json
     runner_mod._set_session_factory(session_factory)
@@ -205,3 +242,100 @@ async def test_load_file_failure_isolated(db_session, seed, session_factory):
     assert "no such file" in (r1_db.error_message or "")
     assert r2_db.status == "done"
     assert db_session.get(Task, task.id).status == "done"
+
+
+class TestScreeningPassRecalc:
+    """初筛通过判定重算：满足条数占比 >= screening_pass_ratio 才通过"""
+
+    def _make_screening(self, met_flags):
+        from app.schemas import ScreeningResult
+        return ScreeningResult(
+            passed=all(met_flags),  # 模拟 LLM 保守输出
+            checks=[{"requirement": f"要求{i}", "met": m, "evidence": "依据"}
+                    for i, m in enumerate(met_flags)],
+        )
+
+    def test_recalc_pass_at_threshold(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, True, False, False, False])  # 2/5 = 40%
+        recalc_screening_pass(s)
+        assert s.passed is True  # 命中阈值即通过
+        assert s.reject_reason is None
+
+    def test_recalc_fail_below_threshold_overrides_llm_pass(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, False])  # 1/2 = 50%...
+        s.passed = True  # LLM 说通过
+        s.checks[0].met = False  # 0/2 = 0%
+        recalc_screening_pass(s)
+        assert s.passed is False  # 代码覆盖 LLM 判断
+        assert "0%" in s.reject_reason and "40%" in s.reject_reason
+
+    def test_recalc_fail_fills_reject_reason(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, False, False, False])  # 1/4 = 25%
+        s.passed = False
+        s.reject_reason = None
+        recalc_screening_pass(s)
+        assert s.passed is False
+        assert s.reject_reason == "硬性要求满足率 25%（1/4），低于 40% 阈值"
+
+    def test_recalc_fail_keeps_llm_reject_reason(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([False, False, False, False])
+        s.reject_reason = "缺少核心技能"
+        recalc_screening_pass(s)
+        assert s.reject_reason == "缺少核心技能"  # 已有原因不覆盖
+
+    def test_recalc_empty_checks_passes(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([])
+        s.passed = False  # LLM 误判
+        s.reject_reason = "误判"
+        recalc_screening_pass(s)
+        assert s.passed is True  # 无硬性要求视为通过
+        assert s.reject_reason is None  # 翻转通过时清理拒绝原因
+
+    def test_recalc_custom_ratio_threshold(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, True, False, False])  # 2/4 = 50%
+        recalc_screening_pass(s, ratio=0.6)
+        assert s.passed is False  # 50% < 60%
+        assert "50%" in s.reject_reason and "60%" in s.reject_reason
+
+
+async def test_screening_stage_applies_recalc(db_session, seed, session_factory):
+    """runner 初筛阶段落库前调用重算：LLM「全满足才通过」的保守输出被按占比放宽。"""
+    task, r1, r2 = seed
+    llm = _mk_profile_llm()
+    llm.chat_json.resume_ids = [r1.id, r2.id]
+    original_chat = llm.chat_json
+
+    async def chat_json(role, *a, **kw):
+        if role == "screener" and f"resume_id={r1.id}" in a[1]:
+            # LLM 保守输出：按「全部满足」规则判为未通过，实际 2/5 = 40%
+            return ScreeningResult(
+                passed=False,
+                checks=[
+                    {"requirement": "本科", "met": True, "evidence": "XX 大学本科"},
+                    {"requirement": "3年经验", "met": True, "evidence": "4 年后端"},
+                    {"requirement": "英语六级", "met": False, "evidence": "未见证书"},
+                    {"requirement": "Python", "met": False, "evidence": "未见"},
+                    {"requirement": "Docker", "met": False, "evidence": "未见"},
+                ],
+                reject_reason="不满足全部硬性要求")
+        return await original_chat(role, *a, **kw)
+    llm.chat_json = chat_json
+    runner_mod._set_session_factory(session_factory)
+
+    with patch.object(runner_mod, "LLMClient", return_value=llm), \
+         patch.object(runner_mod, "_load_file", return_value=b"dummy resume text"):
+        await runner_mod.run_task(task.id)
+
+    db_session.expire_all()
+    r1_db = db_session.get(Resume, r1.id)
+    # 2/5 = 40% >= 0.4 阈值 → 落库前重算翻转 passed，进入评估而非淘汰
+    assert r1_db.screening["passed"] is True
+    assert r1_db.screening["reject_reason"] is None
+    assert r1_db.evaluation is not None
+    assert r1_db.final_grade == "A"

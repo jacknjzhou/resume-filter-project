@@ -3,6 +3,7 @@
     <div style="display: flex; justify-content: space-between; align-items: center">
       <h3>筛选结果（任务 #{{ $route.params.id }}）</h3>
       <div>
+        <el-button @click="$router.push(`/task/${$route.params.id}/detail`)">执行详情</el-button>
         <el-button @click="download('md')">导出 Markdown</el-button>
         <el-button @click="download('xlsx')">导出 Excel</el-button>
       </div>
@@ -11,7 +12,7 @@
       <el-table-column prop="final_rank" label="排名" width="70" />
       <el-table-column label="分档" width="70">
         <template #default="{ row }">
-          <el-tag :type="{ A: 'success', B: 'warning', C: 'info', D: 'danger' }[row.final_grade]">
+          <el-tag :type="gradeType(row.final_grade)">
             {{ row.final_grade }}
           </el-tag>
         </template>
@@ -44,6 +45,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import * as echarts from 'echarts'
 import { getTask, getResumeReport, exportUrl } from '../api'
+import { gradeType } from '../utils/format'
 
 const route = useRoute()
 const task = ref(null)

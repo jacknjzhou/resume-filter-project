@@ -2,6 +2,7 @@ import io
 import json
 from unittest.mock import patch, AsyncMock, Mock
 from fastapi.testclient import TestClient
+from app.models import Task, Resume, LLMLog
 
 
 def _client():
@@ -112,6 +113,70 @@ def test_get_task_detail(db_session, seed_task):
     body = resp.json()
     assert body["status"] == "pending"
     assert len(body["resumes"]) == 2
+
+
+def test_list_tasks_basic(db_session, seed_task):
+    c = _client()
+    resp = c.get("/api/tasks")
+    assert resp.status_code == 200
+    body = resp.json()
+    item = next(i for i in body["items"] if i["task_id"] == seed_task.id)
+    assert item["status"] == "pending"
+    assert item["resume_count"] == 2
+    assert item["created_at"]
+    assert item["grades"] == {}
+
+
+def test_list_tasks_pagination_and_status_filter(db_session, seed_task):
+    c = _client()
+    body = c.get("/api/tasks?page=1&page_size=1").json()
+    assert len(body["items"]) == 1 and body["page_size"] == 1
+    body = c.get("/api/tasks?status=done").json()
+    assert all(i["status"] == "done" for i in body["items"]) and body["items"] == []
+
+
+def test_list_tasks_llm_and_grade_stats(db_session, seed_task):
+    r1 = seed_task.resumes[0]
+    db_session.add_all([
+        LLMLog(task_id=seed_task.id, role="jd_analyst",
+               prompt_tokens=100, completion_tokens=50, duration_ms=1000),
+        LLMLog(task_id=seed_task.id, resume_id=r1.id, role="extractor",
+               prompt_tokens=200, completion_tokens=80, duration_ms=2000),
+    ])
+    r1.final_grade = "A"
+    db_session.commit()
+    c = _client()
+    item = next(i for i in c.get("/api/tasks").json()["items"]
+                if i["task_id"] == seed_task.id)
+    assert item["llm"] == {"prompt_tokens": 300, "completion_tokens": 130,
+                           "duration_ms": 3000}
+    assert item["grades"] == {"A": 1}
+
+
+def test_get_task_detail_with_stage_and_llm_info(db_session, seed_task):
+    r1 = seed_task.resumes[0]
+    db_session.add_all([
+        LLMLog(task_id=seed_task.id, role="jd_analyst",
+               prompt_tokens=100, completion_tokens=50, duration_ms=1000),
+        LLMLog(task_id=seed_task.id, resume_id=r1.id, role="extractor",
+               prompt_tokens=200, completion_tokens=80, duration_ms=2000),
+    ])
+    db_session.commit()
+    c = _client()
+    body = c.get(f"/api/tasks/{seed_task.id}").json()
+    # 旧字段保持兼容（TaskProgress/TaskResult 依赖）
+    assert body["jd_parsed"] is None and body["summary_report"] is None
+    assert len(body["resumes"]) == 2
+    # 新字段
+    assert body["stage_timeline"] == []
+    assert body["llm_usage"] == {"prompt_tokens": 300, "completion_tokens": 130,
+                                 "duration_ms": 3000, "calls": 2}
+    assert len(body["task_llm_calls"]) == 1
+    assert body["task_llm_calls"][0]["role"] == "jd_analyst"
+    r = body["resumes"][0]
+    assert r["source_type"] == "text" and r["error_message"] is None
+    assert r["stage_timeline"] == []
+    assert len(r["llm_calls"]) == 1 and r["llm_calls"][0]["role"] == "extractor"
 
 
 def test_get_resume_report(db_session, seed_evaluated_resume):

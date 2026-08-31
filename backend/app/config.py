@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ocr_confidence_threshold: float = 0.85
     ocr_base_url: str = "http://ocr:8866"
     step_timeout: int = 120
+    screening_pass_ratio: float = 0.4  # 初筛通过阈值：满足硬性要求条数占比
     max_concurrency: int = 3
     uploads_dir: str = "./uploads"
 

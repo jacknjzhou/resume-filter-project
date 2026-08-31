@@ -4,12 +4,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse, Response, PlainTextResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
 from app.llm import LLMClient
-from app.models import Task, Resume
+from app.models import Task, Resume, LLMLog
 from app.parsers import ParseError, parse_resume_sync
 from app.pipeline.events import event_bus
 from app.pipeline.runner import run_task, IMAGE_EXTS
@@ -42,6 +43,62 @@ def _source_type(filename: str) -> str:
 async def health(db: Session = Depends(get_db)):
     ok = await LLMClient(settings, db).health_check()
     return {"llm": ok}
+
+
+@router.get("/tasks")
+def list_tasks(page: int = 1, page_size: int = 20, status: str | None = None,
+               db: Session = Depends(get_db)):
+    page, page_size = max(1, page), min(max(1, page_size), 100)
+    q = db.query(Task).order_by(Task.id.desc())
+    if status:
+        q = q.filter(Task.status == status)
+    total = q.count()
+    tasks = q.offset((page - 1) * page_size).limit(page_size).all()
+    ids = [t.id for t in tasks]
+
+    resume_counts: dict[int, int] = {}
+    if ids:
+        for tid, cnt in (db.query(Resume.task_id, func.count())
+                         .filter(Resume.task_id.in_(ids))
+                         .group_by(Resume.task_id)):
+            resume_counts[tid] = cnt
+
+    # 分档统计：已评级按等级分桶；终态（done/failed）但未评级计「未定级」；
+    # pending/处理中的简历不计入，避免任务刚开始时就出现大量「未定级」
+    grades: dict[int, dict] = {}
+    if ids:
+        for tid, grade, cnt in (db.query(Resume.task_id, Resume.final_grade, func.count())
+                                .filter(Resume.task_id.in_(ids),
+                                        Resume.final_grade.isnot(None))
+                                .group_by(Resume.task_id, Resume.final_grade)):
+            grades.setdefault(tid, {})[grade] = cnt
+        for tid, cnt in (db.query(Resume.task_id, func.count())
+                         .filter(Resume.task_id.in_(ids),
+                                 Resume.final_grade.is_(None),
+                                 Resume.status.in_(("done", "failed")))
+                         .group_by(Resume.task_id)):
+            grades.setdefault(tid, {})["未定级"] = cnt
+
+    llm: dict[int, dict] = {}
+    if ids:
+        for tid, pt, ct, dur in (db.query(LLMLog.task_id,
+                                          func.coalesce(func.sum(LLMLog.prompt_tokens), 0),
+                                          func.coalesce(func.sum(LLMLog.completion_tokens), 0),
+                                          func.coalesce(func.sum(LLMLog.duration_ms), 0))
+                                 .filter(LLMLog.task_id.in_(ids))
+                                 .group_by(LLMLog.task_id)):
+            llm[tid] = {"prompt_tokens": pt, "completion_tokens": ct, "duration_ms": dur}
+
+    items = [{
+        "task_id": t.id, "status": t.status,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "resume_count": resume_counts.get(t.id, 0),
+        "grades": grades.get(t.id, {}),
+        "llm": llm.get(t.id),
+    } for t in tasks]
+    return {"total": total, "page": page,
+            "page_size": page_size, "items": items}
 
 
 @router.post("/tasks")
@@ -121,19 +178,47 @@ async def create_task(
     return {"task_id": task.id}
 
 
+def _llm_call(log) -> dict:
+    return {"role": log.role, "prompt_tokens": log.prompt_tokens,
+            "completion_tokens": log.completion_tokens,
+            "duration_ms": log.duration_ms,
+            "created_at": log.created_at.isoformat() if log.created_at else None}
+
+
 @router.get("/tasks/{task_id}")
 def get_task(task_id: int, db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "任务不存在")
+    logs = (db.query(LLMLog).filter(LLMLog.task_id == task_id)
+            .order_by(LLMLog.id).all())
+    task_calls = [_llm_call(l) for l in logs if l.resume_id is None]
+    resume_calls: dict[int, list] = {}
+    for l in logs:
+        if l.resume_id is not None:
+            resume_calls.setdefault(l.resume_id, []).append(_llm_call(l))
+    usage = {
+        "prompt_tokens": sum(l.prompt_tokens for l in logs),
+        "completion_tokens": sum(l.completion_tokens for l in logs),
+        "duration_ms": sum(l.duration_ms for l in logs),
+        "calls": len(logs),
+    }
     return {
-        "task_id": task.id,
-        "status": task.status,
+        "task_id": task.id, "status": task.status,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         "jd_parsed": task.jd_parsed,
         "summary_report": task.summary_report,
+        "stage_timeline": task.stage_timeline or [],
+        "llm_usage": usage,
+        "task_llm_calls": task_calls,
         "resumes": [{
             "id": r.id, "filename": r.filename, "status": r.status,
+            "source_type": r.source_type,
             "final_grade": r.final_grade, "final_rank": r.final_rank,
+            "error_message": r.error_message,
+            "stage_timeline": r.stage_timeline or [],
+            "llm_calls": resume_calls.get(r.id, []),
         } for r in task.resumes],
     }
 

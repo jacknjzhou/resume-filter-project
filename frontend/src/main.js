@@ -13,6 +13,9 @@ const router = createRouter({
     { path: '/', component: TaskCreate },
     { path: '/task/:id/progress', component: TaskProgress },
     { path: '/task/:id', component: TaskResult },
+    { path: '/tasks', component: () => import('./views/TaskHistory.vue') },
+    { path: '/task/:id/detail', component: () => import('./views/TaskDetail.vue') },
+    { path: '/settings', component: () => import('./views/SettingsView.vue') },
   ],
 })
 

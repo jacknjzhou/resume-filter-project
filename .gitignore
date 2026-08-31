@@ -5,6 +5,7 @@ __pycache__/
 *.db
 .env
 .venv/
+.trae/
 
 # 运行产物
 backend/uploads/
