@@ -291,8 +291,10 @@ class TestScreeningPassRecalc:
         from app.pipeline.runner import recalc_screening_pass
         s = self._make_screening([])
         s.passed = False  # LLM 误判
+        s.reject_reason = "误判"
         recalc_screening_pass(s)
         assert s.passed is True  # 无硬性要求视为通过
+        assert s.reject_reason is None  # 翻转通过时清理拒绝原因
 
     def test_recalc_custom_ratio_threshold(self):
         from app.pipeline.runner import recalc_screening_pass
