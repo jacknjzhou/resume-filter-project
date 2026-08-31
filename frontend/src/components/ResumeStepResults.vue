@@ -43,6 +43,10 @@
       <el-tag :type="report.screening.passed ? 'success' : 'danger'">
         {{ report.screening.passed ? '通过' : '未通过' }}
       </el-tag>
+      <span v-if="metRatio" class="met-ratio mono"
+            :class="report.screening.passed ? 't-green' : 't-red'">
+        满足 {{ metRatio.met }}/{{ metRatio.total }}（{{ metRatio.pct }}%）
+      </span>
       <span v-if="!report.screening.passed && report.screening.reject_reason" class="err"
             style="margin-left: 10px">{{ report.screening.reject_reason }}</span>
       <el-table v-if="report.screening.checks?.length"
@@ -112,6 +116,13 @@ const noResults = computed(() =>
   (!props.report.raw_text && !props.report.parse_meta &&
    !props.report.profile && !props.report.screening && !props.report.evaluation))
 
+const metRatio = computed(() => {
+  const checks = props.report?.screening?.checks
+  if (!checks?.length) return null
+  const met = checks.filter((c) => c.met).length
+  return { met, total: checks.length, pct: Math.round((met / checks.length) * 100) }
+})
+
 const fmtScore = (v) =>
   typeof v === 'number' && Number.isFinite(v) ? v : 0
 
@@ -143,5 +154,6 @@ const fmtScoreText = (v) =>
 .plain-list { margin: 0; padding-left: 18px; font-size: 13px; color: #606266; }
 .dim { color: #909399; font-size: 12px; }
 .err { color: #f56c6c; font-size: 12px; }
+.met-ratio { font-size: 12px; margin-left: 10px; }
 .mono { font-variant-numeric: tabular-nums; }
 </style>
