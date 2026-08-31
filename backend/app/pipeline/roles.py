@@ -25,7 +25,7 @@ async def analyze_jd(llm, jd_text: str, task_id=None) -> JDParsed:
 async def extract_profile(llm, resume_text: str, resume_id: int, task_id=None) -> ResumeProfile:
     return await llm.chat_json("extractor", _prompt("extractor"),
                                f"简历文本：\n{resume_text}", ResumeProfile,
-                               task_id=task_id)
+                               task_id=task_id, resume_id=resume_id)
 
 
 async def screen_resume(llm, jd_parsed: JDParsed, profile: ResumeProfile,
@@ -33,7 +33,7 @@ async def screen_resume(llm, jd_parsed: JDParsed, profile: ResumeProfile,
     user = (f"结构化 JD：\n{_dump(jd_parsed.model_dump())}\n\n"
             f"候选人档案（resume_id={resume_id}）：\n{_dump(profile.model_dump())}")
     return await llm.chat_json("screener", _prompt("screener"), user,
-                               ScreeningResult, task_id=task_id)
+                               ScreeningResult, task_id=task_id, resume_id=resume_id)
 
 
 async def evaluate_resume(llm, jd_parsed: JDParsed, profile: ResumeProfile,
@@ -41,7 +41,7 @@ async def evaluate_resume(llm, jd_parsed: JDParsed, profile: ResumeProfile,
     user = (f"结构化 JD：\n{_dump(jd_parsed.model_dump())}\n\n"
             f"候选人档案（resume_id={resume_id}）：\n{_dump(profile.model_dump())}")
     return await llm.chat_json("interviewer", _prompt("interviewer"), user,
-                               EvaluationResult, task_id=task_id)
+                               EvaluationResult, task_id=task_id, resume_id=resume_id)
 
 
 async def summarize_ranking(llm, jd_parsed: JDParsed, items: list[dict],

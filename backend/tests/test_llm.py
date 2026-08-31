@@ -144,3 +144,20 @@ async def test_health_check_false_on_error(db_session, patch_openai):
     client = LLMClient(settings=None, db=db_session)
     client._client.models.set_error(RuntimeError("boom"))
     assert await client.health_check() is False
+
+
+async def test_writes_llm_log_with_resume_id(db_session, patch_openai):
+    patch_openai([json.dumps({"ok": True})])
+    client = LLMClient(settings=None, db=db_session)
+    await client.chat_json("extractor", "sys", "user", Out, task_id=1, resume_id=42)
+    from app.models import LLMLog
+    log = db_session.query(LLMLog).one()
+    assert log.resume_id == 42
+
+
+async def test_writes_llm_log_resume_id_defaults_none(db_session, patch_openai):
+    patch_openai([json.dumps({"ok": True})])
+    client = LLMClient(settings=None, db=db_session)
+    await client.chat_json("jd_analyst", "sys", "user", Out, task_id=1)
+    from app.models import LLMLog
+    assert db_session.query(LLMLog).one().resume_id is None

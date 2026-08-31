@@ -47,6 +47,7 @@ class LLMLog(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     role: Mapped[str] = mapped_column(String(50))
+    resume_id: Mapped[int | None] = mapped_column(ForeignKey("resumes.id"), nullable=True)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
