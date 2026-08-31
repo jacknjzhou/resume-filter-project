@@ -18,7 +18,7 @@
         <b>{{ report.profile.name || '未识别姓名' }}</b>
       </p>
       <div v-if="report.profile.skills?.length" style="margin-bottom: 8px">
-        <el-tag v-for="s in report.profile.skills" :key="s" size="small"
+        <el-tag v-for="(s, i) in report.profile.skills" :key="i" size="small"
                 style="margin: 0 4px 4px 0">{{ s }}</el-tag>
       </div>
       <el-table v-if="report.profile.work_experience?.length"
@@ -142,5 +142,6 @@ const fmtScoreText = (v) =>
 .t-orange { color: #e6a23c; }
 .plain-list { margin: 0; padding-left: 18px; font-size: 13px; color: #606266; }
 .dim { color: #909399; font-size: 12px; }
+.err { color: #f56c6c; font-size: 12px; }
 .mono { font-variant-numeric: tabular-nums; }
 </style>
