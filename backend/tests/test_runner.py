@@ -238,3 +238,62 @@ async def test_load_file_failure_isolated(db_session, seed, session_factory):
     assert "no such file" in (r1_db.error_message or "")
     assert r2_db.status == "done"
     assert db_session.get(Task, task.id).status == "done"
+
+
+class TestScreeningPassRecalc:
+    """初筛通过判定重算：满足条数占比 >= screening_pass_ratio 才通过"""
+
+    def _make_screening(self, met_flags):
+        from app.schemas import ScreeningResult
+        return ScreeningResult(
+            passed=all(met_flags),  # 模拟 LLM 保守输出
+            checks=[{"requirement": f"要求{i}", "met": m, "evidence": "依据"}
+                    for i, m in enumerate(met_flags)],
+        )
+
+    def test_recalc_pass_at_threshold(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, True, False, False, False])  # 2/5 = 40%
+        recalc_screening_pass(s)
+        assert s.passed is True  # 命中阈值即通过
+        assert s.reject_reason is None
+
+    def test_recalc_fail_below_threshold_overrides_llm_pass(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, False])  # 1/2 = 50%...
+        s.passed = True  # LLM 说通过
+        s.checks[0].met = False  # 0/2 = 0%
+        recalc_screening_pass(s)
+        assert s.passed is False  # 代码覆盖 LLM 判断
+        assert "0%" in s.reject_reason and "40%" in s.reject_reason
+
+    def test_recalc_fail_fills_reject_reason(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([True, False, False, False])  # 1/4 = 25%
+        s.passed = False
+        s.reject_reason = None
+        recalc_screening_pass(s)
+        assert s.passed is False
+        assert s.reject_reason == "硬性要求满足率 25%（1/4），低于 40% 阈值"
+
+    def test_recalc_fail_keeps_llm_reject_reason(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([False, False, False, False])
+        s.reject_reason = "缺少核心技能"
+        recalc_screening_pass(s)
+        assert s.reject_reason == "缺少核心技能"  # 已有原因不覆盖
+
+    def test_recalc_empty_checks_passes(self):
+        from app.pipeline.runner import recalc_screening_pass
+        s = self._make_screening([])
+        s.passed = False  # LLM 误判
+        recalc_screening_pass(s)
+        assert s.passed is True  # 无硬性要求视为通过
+
+    def test_recalc_ratio_from_settings(self):
+        from app.pipeline.runner import recalc_screening_pass
+        from app.config import get_settings
+        s = self._make_screening([True, True, False])  # 2/3 ≈ 66.7%
+        # 默认 0.4 阈值下应通过
+        recalc_screening_pass(s, ratio=get_settings().screening_pass_ratio)
+        assert s.passed is True
