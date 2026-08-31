@@ -8,7 +8,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-resume}"]
+      # -d 指定实际库名：pg_isready 缺省会连与用户同名的 "resume" 库，
+      # 该库不存在，导致日志每 5 秒刷一条 FATAL
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-resume} -d ${POSTGRES_DB:-resume_review}"]
       interval: 5s
       timeout: 3s
       retries: 10

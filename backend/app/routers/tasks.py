@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.llm import LLMClient
 from app.models import Task, Resume
+from app.parsers import ParseError, parse_resume_sync
 from app.pipeline.events import event_bus
 from app.pipeline.runner import run_task, IMAGE_EXTS
 
@@ -72,7 +73,25 @@ async def create_task(
     if not await LLMClient(settings, db).health_check():
         raise HTTPException(503, "大模型服务不可用，请检查 LLM_BASE_URL 配置")
 
-    jd_raw = jd_text or (await jd_file.read()).decode("utf-8", errors="replace")
+    # JD 文件（pdf/docx/txt）先解析出纯文本再入库：
+    # 原始二进制（如 docx 的 zip 字节流）含 NUL 字节，PostgreSQL text 字段无法存储
+    if jd_text and jd_text.strip():
+        jd_raw = jd_text
+    elif jd_file is not None:
+        try:
+            result = await asyncio.to_thread(
+                parse_resume_sync, _safe_name(jd_file.filename or "jd"),
+                await jd_file.read())
+        except ParseError as e:
+            raise HTTPException(422, f"JD 文件解析失败：{e}")
+        if result.needs_image_channel:
+            raise HTTPException(422, "JD 文件是扫描件/图片型 PDF，无法提取文本，请直接粘贴 JD 文本")
+        jd_raw = result.text
+        if not jd_raw.strip():
+            raise HTTPException(422, "JD 文件内容为空，无法提取文本")
+    else:
+        jd_raw = None
+
     task = Task(jd_raw=jd_raw, status="pending")
     db.add(task)
     db.flush()
