@@ -41,9 +41,13 @@
       </el-steps>
     </el-card>
 
+    <JDParsedCard v-if="task.jd_parsed || (task.summary_report && !task.summary_report.error)"
+                  :jd-parsed="task.jd_parsed" :summary-report="task.summary_report"
+                  :resumes="task.resumes" />
+
     <el-card>
       <h3 class="page-title" style="margin-bottom: 12px">简历处理明细（{{ task.resumes.length }}）</h3>
-      <el-collapse>
+      <el-collapse v-model="activePanels" @change="onCollapseChange">
         <el-collapse-item v-for="r in task.resumes" :key="r.id" :name="r.id">
           <template #title>
             <span style="font-weight: 600">{{ r.filename }}</span>
@@ -60,6 +64,18 @@
                      :status="stepStatus(r.id, s.stage)"
                      :description="stepDesc(r.id, s.stage)" />
           </el-steps>
+
+          <div style="margin-bottom: 16px">
+            <ResumeStepResults v-if="reportCache[r.id]" :report="reportCache[r.id]" />
+            <div v-else-if="loadingReports[r.id]" v-loading="true"
+                 style="height: 60px"></div>
+            <div v-else-if="reportErrors[r.id]">
+              <el-alert type="error" :closable="false"
+                        :title="`结果加载失败：${reportErrors[r.id]}`" />
+              <el-button size="small" style="margin-top: 8px"
+                         @click="ensureReport(r.id)">重试</el-button>
+            </div>
+          </div>
 
           <el-table v-if="r.llm_calls.length" :data="r.llm_calls" size="small">
             <el-table-column prop="role" label="角色" width="130" />
@@ -101,11 +117,35 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getTask } from '../api'
+import { getTask, getResumeReport } from '../api'
+import JDParsedCard from '../components/JDParsedCard.vue'
+import ResumeStepResults from '../components/ResumeStepResults.vue'
 
 const route = useRoute()
 const task = ref(null)
 const loading = ref(true)
+
+const activePanels = ref([])
+const reportCache = ref({})
+const loadingReports = ref({})
+const reportErrors = ref({})
+
+async function ensureReport(resumeId) {
+  if (reportCache.value[resumeId] || loadingReports.value[resumeId]) return
+  loadingReports.value[resumeId] = true
+  reportErrors.value[resumeId] = null
+  try {
+    reportCache.value[resumeId] = await getResumeReport(resumeId)
+  } catch (e) {
+    reportErrors.value[resumeId] = e.message || '未知错误'
+  } finally {
+    loadingReports.value[resumeId] = false
+  }
+}
+
+function onCollapseChange(names) {
+  ;(names || []).forEach((n) => ensureReport(Number(n)))
+}
 
 const TASK_STEPS = [
   { stage: 'jd_parse', label: 'JD 解析' },
