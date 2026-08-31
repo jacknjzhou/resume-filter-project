@@ -18,7 +18,10 @@ PROFILE_WEAK = {"name": "王五",
                 "work_experience": [{"company": "A", "title": "前端", "period": "1年", "summary": ""}],
                 "skills": [], "projects": [], "certificates": []}
 SCREEN_OK = {"passed": True, "checks": [], "reject_reason": None}
-SCREEN_REJECT = {"passed": False, "checks": [], "reject_reason": "经验不足"}
+SCREEN_REJECT = {"passed": False,
+                 "checks": [{"requirement": "本科及以上学历", "met": False,
+                             "evidence": "大专学历"}],
+                 "reject_reason": "经验不足"}
 EVAL = {"skill_match": 75, "experience_match": 70, "stability": 85, "potential": 65,
         "highlights": ["经验扎实"], "risks": [], "gaps": [],
         "interview_questions": ["介绍最有挑战的项目？"]}
