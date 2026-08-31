@@ -45,6 +45,67 @@ def test_create_task_and_start_pipeline(tmp_path):
     mock_run.assert_called_once_with(task_id)
 
 
+def test_create_task_with_docx_jd_file_stores_extracted_text(db_session):
+    """JD 上传 docx 时应提取文本入库，而不是存原始二进制（PG text 禁止 NUL 字节）。"""
+    from docx import Document
+    from app.models import Task
+
+    doc = Document()
+    doc.add_paragraph("资深 Go 后端工程师 JD")
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    c = _client()
+    with patch("app.routers.tasks.LLMClient") as MockLLM, \
+         patch("app.routers.tasks.run_task", new_callable=AsyncMock):
+        MockLLM.return_value.health_check = AsyncMock(return_value=True)
+        resp = c.post(
+            "/api/tasks",
+            data={"pasted_texts": "张三 Go 工程师"},
+            files={"jd_file": ("jd.docx", buf.getvalue(),
+                               "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+    assert resp.status_code == 200, resp.text
+    task = db_session.get(Task, resp.json()["task_id"])
+    assert "资深 Go 后端工程师 JD" in task.jd_raw
+    assert "\x00" not in task.jd_raw
+
+
+def test_create_task_with_scanned_jd_file_rejected(db_session):
+    """扫描件/图片型 PDF 的 JD 无法同步提取文本，应返回 422 提示改用文本。"""
+    from app.parsers.pdf_parser import ParseResult
+
+    c = _client()
+    with patch("app.routers.tasks.LLMClient") as MockLLM, \
+         patch("app.routers.tasks.parse_resume_sync",
+               return_value=ParseResult(text="", needs_image_channel=True)):
+        MockLLM.return_value.health_check = AsyncMock(return_value=True)
+        resp = c.post(
+            "/api/tasks",
+            data={"pasted_texts": "张三 Go 工程师"},
+            files={"jd_file": ("jd.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+    assert resp.status_code == 422
+
+
+def test_create_task_with_corrupt_jd_file_rejected(db_session):
+    """损坏的 JD 文件解析失败应返回 422，而不是 500。"""
+    from app.parsers import ParseError
+
+    c = _client()
+    with patch("app.routers.tasks.LLMClient") as MockLLM, \
+         patch("app.routers.tasks.parse_resume_sync",
+               side_effect=ParseError("docx 无法解析")):
+        MockLLM.return_value.health_check = AsyncMock(return_value=True)
+        resp = c.post(
+            "/api/tasks",
+            data={"pasted_texts": "张三 Go 工程师"},
+            files={"jd_file": ("jd.docx", b"not a docx",
+                               "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+    assert resp.status_code == 422
+
+
 def test_get_task_detail(db_session, seed_task):
     c = _client()
     resp = c.get(f"/api/tasks/{seed_task.id}")
