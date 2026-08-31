@@ -67,6 +67,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listTasks } from '../api'
+import { gradeType } from '../utils/format'
 
 const router = useRouter()
 const items = ref([])
@@ -81,7 +82,6 @@ const STATUS = {
 }
 const statusLabel = (s) => STATUS[s] || s
 const tagType = (s) => ({ done: 'success', failed: 'danger' }[s] || 'info')
-const gradeType = (g) => ({ A: 'success', B: 'warning', C: 'info', D: 'danger' }[g] || 'info')
 
 async function load(p = 1) {
   page.value = p
