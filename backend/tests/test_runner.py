@@ -72,7 +72,40 @@ async def test_pipeline_full_flow(db_session, seed, session_factory):
         assert r.status == "done"
         assert r.final_grade == "A"
     assert len(task.summary_report["rankings"]) == 2
+    # 任务级时间线：jd_parse 与 summarize 两阶段均已闭合
+    stages = {t["stage"]: t for t in task.stage_timeline}
+    assert set(stages) == {"jd_parse", "summarize"}
+    for t in task.stage_timeline:
+        assert t["started_at"] and t["ended_at"] and t["status"] == "ok"
+    # 简历级时间线：四个阶段全部闭合
+    for r in task.resumes:
+        r_stages = {t["stage"] for t in r.stage_timeline}
+        assert r_stages == {"parsing", "extracting", "screening", "evaluating"}
     bus.unsubscribe(task.id, q)
+
+
+async def test_stage_timeline_closes_open_stages_on_failure(db_session, seed, session_factory):
+    task, r1, r2 = seed
+    llm = _mk_profile_llm()
+
+    async def fake_extract(llm_, text, rid, task_id=None):
+        raise RuntimeError("extract exploded")
+
+    runner_mod._set_session_factory(session_factory)
+    with patch.object(runner_mod, "LLMClient", return_value=llm), \
+         patch.object(runner_mod, "_load_file", return_value=b"text"), \
+         patch.object(runner_mod.roles, "extract_profile", fake_extract):
+        await runner_mod.run_task(task.id)
+
+    db_session.expire_all()
+    task = db_session.get(Task, task.id)
+    assert task.status == "failed"
+    jd_stage = next(t for t in task.stage_timeline if t["stage"] == "jd_parse")
+    assert jd_stage["status"] == "ok"  # JD 阶段成功，之后才失败
+    r = db_session.get(type(r1), r1.id)
+    ext = next(t for t in r.stage_timeline if t["stage"] == "extracting")
+    assert ext["status"] == "failed" and ext["detail"]
+    assert ext.get("ended_at") is not None
 
 
 async def test_screen_reject_short_circuit(db_session, seed, session_factory):
