@@ -72,19 +72,21 @@ def recalc_screening_pass(screening, ratio: float | None = None):
     """代码确定性重算初筛通过判定，覆盖 LLM 的 passed（LLM 算术不可靠）。
 
     - 满足条数占比 >= ratio 即通过；checks 为空视为通过（无硬性要求）。
-    - 未通过且无 reject_reason 时生成兜底文案。
+    - 通过时清理 reject_reason；未通过且无 reject_reason 时生成兜底文案。
     """
-    from app.config import get_settings
     if ratio is None:
         ratio = get_settings().screening_pass_ratio
     checks = screening.checks or []
     if not checks:
         screening.passed = True
+        screening.reject_reason = None
         return
     met = sum(1 for c in checks if c.met)
     total = len(checks)
     screening.passed = (met / total) >= ratio
-    if not screening.passed and not screening.reject_reason:
+    if screening.passed:
+        screening.reject_reason = None
+    elif not screening.reject_reason:
         screening.reject_reason = (
             f"硬性要求满足率 {round(met / total * 100)}%（{met}/{total}），"
             f"低于 {round(ratio * 100)}% 阈值")
@@ -215,6 +217,7 @@ async def _process_resume(resume_id: int, task_id: int, jd_parsed, sem: asyncio.
                 roles.screen_resume(llm, jd_parsed, profile, resume_id, task_id=task_id),
                 timeout=settings.step_timeout)
             _stage_end(r, "screening")
+            recalc_screening_pass(screening)
             r.screening = screening.model_dump()
 
             if not screening.passed:

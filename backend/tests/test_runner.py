@@ -116,7 +116,11 @@ async def test_screen_reject_short_circuit(db_session, seed, session_factory):
 
     async def chat_json(role, *a, **kw):
         if role == "screener" and f"resume_id={r1.id}" in a[1]:
-            return ScreeningResult(passed=False, checks=[], reject_reason="学历不符")
+            # 0/1 = 0% < 40% 阈值，重算后仍被拒（checks 为空会被重算为通过）
+            return ScreeningResult(
+                passed=False,
+                checks=[{"requirement": "本科及以上", "met": False, "evidence": "大专学历"}],
+                reject_reason="学历不符")
         return await original_chat(role, *a, **kw)
     llm.chat_json = chat_json
     runner_mod._set_session_factory(session_factory)
@@ -290,10 +294,46 @@ class TestScreeningPassRecalc:
         recalc_screening_pass(s)
         assert s.passed is True  # 无硬性要求视为通过
 
-    def test_recalc_ratio_from_settings(self):
+    def test_recalc_custom_ratio_threshold(self):
         from app.pipeline.runner import recalc_screening_pass
-        from app.config import get_settings
-        s = self._make_screening([True, True, False])  # 2/3 ≈ 66.7%
-        # 默认 0.4 阈值下应通过
-        recalc_screening_pass(s, ratio=get_settings().screening_pass_ratio)
-        assert s.passed is True
+        s = self._make_screening([True, True, False, False])  # 2/4 = 50%
+        recalc_screening_pass(s, ratio=0.6)
+        assert s.passed is False  # 50% < 60%
+        assert "50%" in s.reject_reason and "60%" in s.reject_reason
+
+
+async def test_screening_stage_applies_recalc(db_session, seed, session_factory):
+    """runner 初筛阶段落库前调用重算：LLM「全满足才通过」的保守输出被按占比放宽。"""
+    task, r1, r2 = seed
+    llm = _mk_profile_llm()
+    llm.chat_json.resume_ids = [r1.id, r2.id]
+    original_chat = llm.chat_json
+
+    async def chat_json(role, *a, **kw):
+        if role == "screener" and f"resume_id={r1.id}" in a[1]:
+            # LLM 保守输出：按「全部满足」规则判为未通过，实际 2/5 = 40%
+            return ScreeningResult(
+                passed=False,
+                checks=[
+                    {"requirement": "本科", "met": True, "evidence": "XX 大学本科"},
+                    {"requirement": "3年经验", "met": True, "evidence": "4 年后端"},
+                    {"requirement": "英语六级", "met": False, "evidence": "未见证书"},
+                    {"requirement": "Python", "met": False, "evidence": "未见"},
+                    {"requirement": "Docker", "met": False, "evidence": "未见"},
+                ],
+                reject_reason="不满足全部硬性要求")
+        return await original_chat(role, *a, **kw)
+    llm.chat_json = chat_json
+    runner_mod._set_session_factory(session_factory)
+
+    with patch.object(runner_mod, "LLMClient", return_value=llm), \
+         patch.object(runner_mod, "_load_file", return_value=b"dummy resume text"):
+        await runner_mod.run_task(task.id)
+
+    db_session.expire_all()
+    r1_db = db_session.get(Resume, r1.id)
+    # 2/5 = 40% >= 0.4 阈值 → 落库前重算翻转 passed，进入评估而非淘汰
+    assert r1_db.screening["passed"] is True
+    assert r1_db.screening["reject_reason"] is None
+    assert r1_db.evaluation is not None
+    assert r1_db.final_grade == "A"
