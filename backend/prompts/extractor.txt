@@ -2,7 +2,7 @@
 {
   "name": "姓名",
   "education": [{"school": "学校", "degree": "学历", "major": "专业", "period": "起止时间"}],
-  "work_experience": [{"company": "公司", "title": "职位", "period": "起止时间", "summary": "一句话概括职责与成果"}],
+  "work_experience": [{"company": "公司", "title": "职位", "period": "起止时间", "summary": "使用50字以内的一段话概括职责与成果"}],
   "skills": ["技能"],
   "projects": ["项目描述"],
   "certificates": ["证书"]
