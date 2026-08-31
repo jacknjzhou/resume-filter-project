@@ -3,6 +3,7 @@
     <div style="display: flex; justify-content: space-between; align-items: center">
       <h3>筛选结果（任务 #{{ $route.params.id }}）</h3>
       <div>
+        <el-button @click="$router.push(`/task/${$route.params.id}/detail`)">执行详情</el-button>
         <el-button @click="download('md')">导出 Markdown</el-button>
         <el-button @click="download('xlsx')">导出 Excel</el-button>
       </div>

@@ -56,3 +56,11 @@ class LLMLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     task: Mapped["Task"] = relationship(back_populates="llm_logs")
+
+
+class AppSetting(Base):
+    """页面可编辑的运行参数覆盖值（key-value）。env 为默认，此处为覆盖。"""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(String(500))
